@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+*.md
+kiro-mcp-config.json
+docker-compose.yml
+.env*
+output
+examples
+docs
+scripts
+.github
+vscode-mcp-config.json
+LICENSE

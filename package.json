@@ -1,0 +1,31 @@
+{
+  "name": "mcp-copilot",
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": "Farhad Badalov",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bfarhad/copilot-bridge-mcp.git"
+  },
+  "description": "MCP server that bridges prompts to Microsoft Copilot via browser automation",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.13.0",
+    "express": "5.1.0",
+    "playwright-core": "1.52.0",
+    "zod": "3.25.64"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.3",
+    "@types/node": "22.15.32",
+    "tsx": "4.19.4",
+    "typescript": "5.8.3"
+  }
+}

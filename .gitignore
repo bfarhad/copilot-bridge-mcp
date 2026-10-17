@@ -1,0 +1,73 @@
+# Patterns without a leading slash match at any depth, so they also cover
+# the nested example projects (examples/**).
+
+# --- Node / TypeScript ------------------------------------------------------
+node_modules/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+.npm/
+
+# --- Bridge runtime output (saved replies contain prompts and repo context) -
+/output/
+
+# --- Secrets and local environment ------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+local.settings.json
+
+# --- Terraform: provider downloads, state, plans, local overrides -----------
+# Provider binaries are hundreds of MB. KEEP .terraform.lock.hcl committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.plan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfvars
+*.tfvars.json
+.terraformrc
+terraform.rc
+
+# --- Python (examples and scripts) -----------------------------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+.python_packages/
+
+# --- Build artefacts and packages --------------------------------------------
+build/
+*.zip
+
+# --- Docker / compose local overrides ----------------------------------------
+docker-compose.override.yml
+
+# --- Logs --------------------------------------------------------------------
+*.log
+
+# --- Editors, assistants, OS -------------------------------------------------
+.idea/
+.vscode/*
+!.vscode/mcp.json
+*.swp
+*.swo
+.claude/
+.DS_Store
+Thumbs.db

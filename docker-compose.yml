@@ -1,0 +1,58 @@
+services:
+  copilot-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mcp-copilot:latest
+    container_name: copilot-bridge
+    restart: unless-stopped
+
+    ports:
+      - "3100:3100"
+
+    environment:
+      PORT: "3100"
+      LOG_LEVEL: "info"
+      COPILOT_URL: "https://copilot.cloud.microsoft/"
+      RESPONSE_TIMEOUT_MS: "240000"
+      SELECTOR_TIMEOUT_MS: "30000"
+      PROFILE_DIR: "/app/profile"
+      HOST_PROFILE_DIR: "/host-profile"
+      OUTPUT_DIR: "/app/output"
+      HOST_OUTPUT_DIR: "${PWD}/output"
+      # Optional: set to connect to a running Edge for CDP-based extraction
+      # Drive the signed-in Edge started by scripts/edge-login.sh (via scripts/cdp-proxy.mjs)
+      CDP_ENDPOINT: "http://host.docker.internal:9223"
+
+    shm_size: "2gb"
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    volumes:
+      # LEGACY cookie-copy mode only (not needed with CDP_ENDPOINT). Mounts your browser
+      # profile, which holds cookies: enable deliberately and adjust the path for your OS.
+      # - type: bind
+      #   source: ${HOME}/Library/Application Support/Microsoft Edge/Default   # macOS example
+      #   target: /host-profile
+      #   read_only: true
+
+      # Saved replies (md/html/json) appear here on the host
+      - ./output:/app/output
+
+      # Writable container profile — persists the Chromium session between restarts
+      - copilot-profile:/app/profile
+
+    healthcheck:
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "fetch('http://localhost:3100/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  copilot-profile:
