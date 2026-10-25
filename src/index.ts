@@ -2,18 +2,21 @@
  * Entry point.
  *
  * HTTP routes:
- *   GET  /           — status page
+ *   GET  /           — status page (shows the version)
  *   GET  /health     — Docker health probe
- *   POST /auth/sync  — copy cookies from host Edge profile → Chromium session
+ *   GET  /version    — version and build commit as JSON
+ *   POST /auth/recheck — re-check the Copilot session (status page button)
+ *   POST /auth/sync  — cookie mode only: copy cookies from host Edge profile
  *   ALL  /mcp        — MCP Streamable HTTP transport (Kiro connects here)
  */
 
 import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpServer } from "./mcp-server.js";
-import { closeBrowser, tryRestoreSession, syncAuth, importCookies, getAuthStatus, debugPage } from "./browser.js";
+import { closeBrowser, tryRestoreSession, syncAuth, importCookies, getAuthStatus, debugPage, recheckSession } from "./browser.js";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
+import { APP_NAME, COMMIT, VERSION, VERSION_LABEL } from "./version.js";
 
 const app = express();
 app.use(express.json({ limit: "5mb" }));
@@ -29,12 +32,17 @@ app.get("/", (_req, res) => {
   const color = isReady ? "#16a34a" : isSyncing ? "#d97706" : "#dc2626";
   const label = isReady ? "● ready" : isSyncing ? "● syncing…" : "● not authenticated";
 
+  const cdp = !!config.cdpEndpoint;
+  const recheck = `<form method="post" action="/auth/recheck"><button>Re-check session</button></form>`;
   const actionSection = isReady
     ? `<p>Copilot session is active. Kiro can use <code>ask_copilot</code>.</p>
-       <p>Session expired? Run <code>node scripts/sync-cookies.mjs</code> again.</p>`
+       <p>Signed out later? Sign in again in the dedicated Edge window${cdp ? "" : ", then run <code>node scripts/sync-cookies.mjs</code>"}.</p>`
     : isSyncing
-    ? `<p>Importing cookies from your browser profile…</p>`
-    : `<p>On your Mac run <code>scripts/edge-login.sh</code> (sign in to Copilot once),
+    ? `<p>Checking the Copilot session…</p>`
+    : cdp
+    ? `<p>Sign in to Copilot in the dedicated Edge window (opened by <code>scripts/run.sh</code> / <code>run.bat</code>).
+       In Docker mode the CDP proxy must be running.</p>${recheck}`
+    : `<p>Run <code>scripts/edge-login.sh</code> (sign in to Copilot once),
        then <code>node scripts/sync-cookies.mjs</code>.</p>`;
 
   res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -43,7 +51,7 @@ app.get("/", (_req, res) => {
 <head>
   <meta charset="utf-8"/>
   <meta http-equiv="refresh" content="4"/>
-  <title>copilot-bridge</title>
+  <title>copilot-bridge v${VERSION}</title>
   <style>
     *    { box-sizing: border-box; }
     body { font-family: system-ui, sans-serif; max-width: 580px; margin: 60px auto; padding: 0 20px; color: #111; }
@@ -52,6 +60,7 @@ app.get("/", (_req, res) => {
     code { background: #f3f3f3; padding: 2px 6px; border-radius: 4px; font-size: .88rem; }
     .status { font-weight: 700; color: ${color}; font-size: 1rem; }
     .msg    { font-size: .82rem; color: #888; margin-top: .3rem; }
+    .ver { color: #888; font-weight: 400; font-size: .85rem; margin-left: .4rem; }
     hr   { border: none; border-top: 1px solid #e8e8e8; margin: 1.4rem 0; }
     a    { color: #2563eb; }
     button {
@@ -62,7 +71,7 @@ app.get("/", (_req, res) => {
   </style>
 </head>
 <body>
-  <h1>copilot-bridge</h1>
+  <h1>copilot-bridge<span class="ver">v${VERSION_LABEL}</span></h1>
   <p class="status">${label}</p>
   <p class="msg">${auth.message}</p>
   <hr/>
@@ -81,7 +90,14 @@ app.get("/", (_req, res) => {
 // ---------------------------------------------------------------------------
 app.get("/health", (_req, res) => {
   const { status } = getAuthStatus();
-  res.json({ status: "ok", uptime: process.uptime(), auth: status });
+  res.json({ status: "ok", version: VERSION, uptime: process.uptime(), auth: status });
+});
+
+// ---------------------------------------------------------------------------
+// Version
+// ---------------------------------------------------------------------------
+app.get("/version", (_req, res) => {
+  res.json({ name: APP_NAME, version: VERSION, commit: COMMIT });
 });
 
 // ---------------------------------------------------------------------------
@@ -113,6 +129,14 @@ app.post("/auth/sync", async (_req, res) => {
     logger.error("syncAuth error:", msg);
     res.status(500).send(msg);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Re-check the Copilot session (status page button)
+// ---------------------------------------------------------------------------
+app.post("/auth/recheck", async (_req, res) => {
+  await recheckSession().catch((err) => logger.error("recheck failed:", err));
+  res.redirect("/");
 });
 
 // ---------------------------------------------------------------------------
@@ -161,7 +185,7 @@ app.all("/mcp", async (req, res) => {
 // Start
 // ---------------------------------------------------------------------------
 const httpServer = app.listen(config.port, async () => {
-  logger.info(`copilot-bridge listening on http://0.0.0.0:${config.port}`);
+  logger.info(`${APP_NAME} v${VERSION_LABEL} listening on http://0.0.0.0:${config.port}`);
   logger.info(`  UI  : http://localhost:${config.port}/`);
   logger.info(`  MCP : http://localhost:${config.port}/mcp`);
   await tryRestoreSession();

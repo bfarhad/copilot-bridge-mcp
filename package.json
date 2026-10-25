@@ -1,6 +1,6 @@
 {
   "name": "mcp-copilot",
-  "version": "0.1.0",
+  "version": "0.3.2",
   "license": "MIT",
   "author": "Farhad Badalov",
   "repository": {
@@ -9,6 +9,9 @@
   },
   "description": "MCP server that bridges prompts to Microsoft Copilot via browser automation",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",

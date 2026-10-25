@@ -3,7 +3,7 @@
     "copilot-bridge": {
       "url": "http://localhost:3100/mcp",
       "disabled": false,
-      "autoApprove": ["ask_copilot", "review_code", "get_status"]
+      "autoApprove": ["ask_copilot", "ask_copilot_batch", "review_code", "get_status"]
     }
   }
 }

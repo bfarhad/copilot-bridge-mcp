@@ -6,18 +6,27 @@
 // set CDP_PROXY_HOST to the Docker bridge address — never 0.0.0.0 on an untrusted
 // network, since this port gives full control of the browser.
 // It rewrites the Host header and the ws:// URLs in replies.
+//
+// Environment:
+//   CDP_PORT        Edge debug port (default 9222)
+//   CDP_TARGET_HOST where Edge listens, as seen from the proxy (default 127.0.0.1;
+//                   host.docker.internal when the proxy itself runs in a container)
+//   CDP_PROXY_PORT  listen port (default 9223)
+//   CDP_PROXY_HOST  listen address (default 127.0.0.1)
 import http from "node:http";
 import net from "node:net";
 
 const TARGET_PORT = Number(process.env.CDP_PORT ?? 9222);
 const LISTEN_PORT = Number(process.env.CDP_PROXY_PORT ?? 9223);
 const LISTEN_HOST = process.env.CDP_PROXY_HOST ?? "127.0.0.1";
+const CONNECT_HOST = process.env.CDP_TARGET_HOST ?? "127.0.0.1";
+// Edge accepts only an IP or localhost in the Host header, whatever address we connect to.
 const TARGET_HOST = `127.0.0.1:${TARGET_PORT}`;
 
 const server = http.createServer((req, res) => {
   const origHost = req.headers.host ?? `localhost:${LISTEN_PORT}`;
   const up = http.request(
-    { host: "127.0.0.1", port: TARGET_PORT, path: req.url, method: req.method, headers: { ...req.headers, host: TARGET_HOST } },
+    { host: CONNECT_HOST, port: TARGET_PORT, path: req.url, method: req.method, headers: { ...req.headers, host: TARGET_HOST } },
     (r) => {
       const chunks = [];
       r.on("data", (c) => chunks.push(c));
@@ -34,7 +43,7 @@ const server = http.createServer((req, res) => {
 });
 
 server.on("upgrade", (req, socket, head) => {
-  const up = net.connect(TARGET_PORT, "127.0.0.1", () => {
+  const up = net.connect(TARGET_PORT, CONNECT_HOST, () => {
     const lines = [`${req.method} ${req.url} HTTP/1.1`];
     for (let i = 0; i < req.rawHeaders.length; i += 2) {
       const k = req.rawHeaders[i];
@@ -49,5 +58,5 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 server.listen(LISTEN_PORT, LISTEN_HOST, () =>
-  console.log(`CDP proxy ${LISTEN_HOST}:${LISTEN_PORT} → ${TARGET_HOST}`)
+  console.log(`CDP proxy ${LISTEN_HOST}:${LISTEN_PORT} → ${CONNECT_HOST}:${TARGET_PORT}`)
 );

@@ -3,58 +3,95 @@
 A local MCP (Model Context Protocol) server that bridges prompts to **Microsoft Copilot** by driving your already signed-in Edge browser. Kiro, VS Code (Copilot Chat / Claude Code) and any other MCP client can call Copilot as a native tool — no API key, no separate login.
 
 ```
-Kiro / VS Code → MCP HTTP :3100 → copilot-bridge (Docker) → CDP → your Edge → Copilot
+Kiro / VS Code → MCP HTTP :3100 → copilot-bridge (host Node.js or Docker) → CDP → your Edge → Copilot
 ```
 
-> **The Docker container must be running and listening on port 3100 for any editor to connect.**
+> **The bridge must be running and listening on port 3100 for any editor to connect.**
 > Verify: `curl http://localhost:3100/health` → `{"status":"ok",...,"auth":"ready"}`.
-> If the container is stopped, Kiro/VS Code show the server as disconnected and no tools appear.
-> Start it with `docker compose up -d`; it uses `restart: unless-stopped`, so it comes back after Docker restarts.
+> If it is stopped, Kiro/VS Code show the server as disconnected and no tools appear.
+> Start it with `scripts/run.sh` (macOS/Linux) or `scripts\run.bat` (Windows) and choose Node.js or Docker. In Docker mode it uses `restart: unless-stopped`, so it comes back after Docker restarts.
 
-More detail on editor setup: [docs/editor-setup-vscode-kiro.md](docs/editor-setup-vscode-kiro.md).
+Architecture, design choices and editor setup: [docs/editor-setup-vscode-kiro.md](docs/editor-setup-vscode-kiro.md).
+Using the tools from an AI assistant (Claude, Kiro, Continue): [docs/ai-assistant-guide.md](docs/ai-assistant-guide.md).
 
 ---
 
+## Prerequisites
+
+| Requirement | Needed for | Notes |
+|---|---|---|
+| Microsoft Edge | both modes | Run on the host, not in a container. Windows, macOS, or Linux (`microsoft-edge-stable`). |
+| Microsoft account with Copilot access | both modes | Work/school (Entra) accounts use `copilot.cloud.microsoft`; personal accounts use `copilot.microsoft.com`. |
+| Node.js 20+ and npm | node mode | Check with `node -v`. |
+| Docker (Engine, Desktop, OrbStack or Colima), with Compose v2 | docker mode | Needed only when Node.js is not installed, or if you choose `docker`. Check with `docker compose version`. |
+| An MCP client | using the tools | Kiro, VS Code (Copilot Chat), Continue, Claude Code. See [editor setup](docs/editor-setup-vscode-kiro.md). |
+| git, curl | optional | git adds the commit hash to the version; curl runs the health check. |
+
+You need Node.js **or** Docker, not both. Port `3100` (bridge), `9222` (Edge debugging) and, in Docker mode, `9223` (proxy) must be free.
+
 ## Quick Start
 
-### 1. Build and run the container
+### 1. Start the bridge
+
+Run one script. It asks how to run the bridge, then starts a dedicated Edge (remote debugging on `9222`) and the bridge:
 
 ```bash
-cd mcp-copilot
-docker compose up -d --build
-curl http://localhost:3100/health
+scripts/run.sh            # macOS / Linux
+scripts\run.bat           # Windows
 ```
 
-`auth` stays `unauthenticated` until step 2 is done.
-
-### 2. Sign in once (dedicated Edge + CDP proxy)
-
-The bridge drives a dedicated Edge profile over the DevTools protocol. Run these on your Mac:
-
-```bash
-./scripts/edge-login.sh          # opens Edge (profile ~/.copilot-bridge-edge, debug port 9222)
-# sign in to Copilot in that window (work accounts land on copilot.cloud.microsoft)
-node scripts/cdp-proxy.mjs &     # loopback proxy 9223 -> 9222 (rewrites the Host header)
+```
+How do you want to run copilot-bridge?
+  1) Node.js  - build and run on this machine. No Docker, no proxy.   [available, Node.js v22.x]
+  2) Docker   - bridge and CDP proxy as containers. No Node.js needed. [available]
+  q) Quit
+Choice [1]:
 ```
 
-Within a few seconds the container reports `auth: ready` (restart it with `docker compose restart` if it started before Edge was up).
-Keep that Edge window and the proxy running while you use the bridge. The sign-in is stored in the dedicated profile, so later launches are already signed in.
+| Option | Needs | What runs |
+|---|---|---|
+| **A: Node.js** | Node.js 20+ and npm | `npm ci`, `npm run build`, then `node dist/index.js` in the terminal (Ctrl+C stops it). Talks to Edge directly. |
+| **B: Docker** | Docker with Compose v2 | The `cdp-proxy` container and the `copilot-bridge` container (`docker compose up -d --build`). Keeps running in the background. |
+
+The menu marks an option as not available when its requirement is missing, and the default is the first available one. To skip the menu, pass the choice:
+
+| Command | Effect |
+|---|---|
+| `scripts/run.sh node` / `scripts\run.bat node` | Option A without asking |
+| `scripts/run.sh docker` / `scripts\run.bat docker` | Option B without asking |
+| `scripts/run.sh auto` | Node.js if installed, otherwise Docker, without asking. Also the behaviour when there is no terminal. |
+| `scripts/run.sh stop` / `scripts\run.bat stop` | Stop the Docker containers (`copilot-bridge`, `cdp-proxy`) |
+
+`RUN_MODE=node|docker|auto` does the same as the argument.
+
+**Switching options.** Both options use port `3100`, so only one can run. If you pick A while the Docker bridge is running, the script offers to stop it. If you pick B while a Node.js bridge is running, it tells you to stop that one first (Ctrl+C). Use `stop` to shut Docker down.
+
+**Docker option checks.** After starting, the script waits for `/health` and checks that the container can reach Edge through the proxy. It prints a warning with the commands to check if it cannot.
+
+Manual start, if you prefer: `./scripts/edge-login.sh` (macOS/Linux) opens the dedicated Edge, then either `npm ci && npm run build && CDP_ENDPOINT=http://127.0.0.1:9222 node dist/index.js`, or `node scripts/cdp-proxy.mjs &` followed by `docker compose up -d --build`.
+
+### 2. Sign in once
+
+In the Edge window that opened (profile `~/.copilot-bridge-edge`, or `%USERPROFILE%\.copilot-bridge-edge` on Windows), sign in to Copilot. Work accounts land on `copilot.cloud.microsoft`. Within a few seconds `curl http://localhost:3100/health` reports `auth: ready` (restart the bridge if it started before Edge was up). The sign-in is stored in the dedicated profile, so later launches are already signed in. Keep that Edge window open while you use the bridge.
+
+Open <http://localhost:3100/> to see the status page, including the running version.
 
 ### Docker runtime compatibility
 
-The container itself runs on any Docker. The one runtime-specific piece is how it reaches the Edge on your host: it connects to `host.docker.internal:9223`, which `scripts/cdp-proxy.mjs` forwards to Edge's debug port.
+In Docker mode the bridge reaches the host's Edge through `host.docker.internal:9223`, which the proxy container forwards to Edge's `127.0.0.1:9222`. The proxy port is published on host loopback only: it gives full control of the browser, so never expose it to a network.
 
 | Runtime | Status |
 |---|---|
-| OrbStack (macOS) | Tested. `host.docker.internal` reaches the host's loopback, so the proxy can stay on `127.0.0.1`. |
-| Docker Desktop (macOS/Windows) | Not tested. `host.docker.internal` is built in and is expected to work the same way. |
-| Linux Docker, Colima, Podman | Not tested. The host address may not be loopback; the proxy may need to listen on the Docker bridge address (set `CDP_PROXY_HOST`/adjust the bind address) and the `host-gateway` mapping in `docker-compose.yml` must resolve. Note that binding to `0.0.0.0` exposes full browser control to your network. |
+| OrbStack (macOS) | Tested. |
+| Docker Desktop (macOS/Windows), Colima | Not tested. `host.docker.internal` is expected to reach host loopback the same way. |
+| Docker Engine on Linux | Not tested. `run.sh` runs the proxy on the host network and binds it to the Docker bridge gateway address, because `host.docker.internal` is not host loopback there. |
+| Podman | Not supported by the scripts. |
 
 ### 3. Register in your editor
 
 The URL is the same everywhere — only the config file format differs. Use `http://localhost:3100/mcp`. (OrbStack users may also have a `*.orb.local` domain for the container; it is optional and Mac/OrbStack-only, so don't share it in config files.)
 
-**Kiro** — `~/.kiro/settings/mcp.json` (user) or `.kiro/settings/mcp.json` (workspace); sample: [kiro-mcp-config.json](kiro-mcp-config.json)
+**Kiro** — `~/.kiro/settings/mcp.json` (user) or `.kiro/settings/mcp.json` (workspace); sample: [configs/kiro-mcp-config.json](configs/kiro-mcp-config.json)
 
 ```json
 {
@@ -62,7 +99,7 @@ The URL is the same everywhere — only the config file format differs. Use `htt
     "copilot-bridge": {
       "url": "http://localhost:3100/mcp",
       "disabled": false,
-      "autoApprove": ["ask_copilot", "review_code", "get_status"]
+      "autoApprove": ["ask_copilot", "ask_copilot_batch", "review_code", "get_status"]
     }
   }
 }
@@ -73,9 +110,9 @@ The URL is the same everywhere — only the config file format differs. Use `htt
 - `disabled` — `true` keeps the entry but doesn't connect.
 - `autoApprove` — tools that run without a confirmation prompt.
 
-Click **Reconnect** in Kiro's MCP panel; all three tools appear.
+Click **Reconnect** in Kiro's MCP panel; all four tools appear.
 
-**VS Code** — `.vscode/mcp.json` (workspace) or `~/Library/Application Support/Code/User/mcp.json` (user); sample: [vscode-mcp-config.json](vscode-mcp-config.json)
+**VS Code** — `.vscode/mcp.json` (workspace) or `~/Library/Application Support/Code/User/mcp.json` (user); sample: [configs/vscode-mcp-config.json](configs/vscode-mcp-config.json)
 
 ```json
 {
@@ -93,6 +130,8 @@ Click **Reconnect** in Kiro's MCP panel; all three tools appear.
 - `url` — the same endpoint as Kiro.
 
 Open Command Palette → **MCP: List Servers** to start/inspect it. VS Code asks for approval per tool call.
+
+**Continue** (VS Code / JetBrains) — `.continue/mcpServers/copilot-bridge.yaml`; see [editor setup](docs/editor-setup-vscode-kiro.md#continue-vs-code--jetbrains-extension)
 
 **Claude Code** (CLI or VS Code extension)
 
@@ -114,31 +153,51 @@ ask Copilot: "what is the difference between TCP and UDP?"
 ask Copilot to review #File:src/browser.ts for security issues
 ask Copilot "summarize the MCP protocol" and start a new chat
 call get_status on copilot-bridge
+review these two files for security issues and return findings as JSON
 ```
 
 - `ask_copilot` — plain prompt; Copilot's full reply returns to the chat.
 - `review_code` — send a file/snippet with an instruction; tell the editor to apply the suggested changes afterwards.
 - `newChat: true` — start a fresh Copilot conversation (default continues the current one).
-- `get_status` — uptime and auth state.
+- `ask_copilot_batch` — several prompts in order.
+- `get_status` — version, auth, Edge reachability, queue and call statistics.
 
 ---
 
 ## Authentication Details
 
-Earlier versions copied Edge's `Cookies` file into the container. That does not work on macOS (cookies are Keychain-encrypted) nor for work/Entra accounts (Microsoft rejects the transplanted session). The bridge now **attaches to your signed-in Edge over CDP** (`CDP_ENDPOINT`) and types into a real Copilot tab, leaving your other tabs alone.
+The bridge **attaches to your signed-in Edge over CDP** (`CDP_ENDPOINT`) and types into a real Copilot tab, leaving your other tabs alone. No cookies or tokens are copied.
 
-- The container reaches the host via `host.docker.internal:9223`.
-- `scripts/cdp-proxy.mjs` forwards that to Edge's `127.0.0.1:9222` and rewrites the `Host` header, which Edge otherwise rejects. It listens on loopback only.
+- Node mode connects to `http://127.0.0.1:9222`.
+- Docker mode connects to `host.docker.internal:9223`; `scripts/cdp-proxy.mjs` forwards that to Edge's `127.0.0.1:9222` and rewrites the `Host` header, which Edge otherwise rejects. Set `CDP_TARGET_HOST` and `CDP_PROXY_HOST` to change where it connects and listens.
 - The session check requires a visible chat input and a non-"Sign in" page, so a sign-in wall is reported as `unauthenticated` instead of `ready`.
 - `COPILOT_URL` selects the entry page (`https://copilot.cloud.microsoft/` for work accounts, `https://copilot.microsoft.com/` for personal).
 
 **Re-sign-in when:** Microsoft expires the session. Sign in again in the dedicated Edge window; no resync is needed.
 
-Legacy cookie paths (`POST /auth/sync`, `POST /auth/cookies` with `scripts/sync-cookies.mjs`) remain for the non-CDP mode (unset `CDP_ENDPOINT`).
+If `CDP_ENDPOINT` is unset the bridge falls back to a cookie-import mode (`POST /auth/sync`, `POST /auth/cookies` with `scripts/sync-cookies.mjs`). It is not needed for normal use.
 
 ---
 
 ## MCP Tool Reference
+
+Four tools. Every tool that sends a prompt accepts the **call options** and **output options** below. A quick usage guide for AI assistants is in [docs/ai-assistant-guide.md](docs/ai-assistant-guide.md).
+
+**Call options** (`ask_copilot`, `ask_copilot_batch`, `review_code`)
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `timeoutMs` | number (5000–900000) | server `RESPONSE_TIMEOUT_MS` | Max wait for the reply |
+| `retries` | number (0–3) | `0` | Extra attempts on failure; retries run in a fresh chat |
+| `dryRun` | boolean | `false` | Return the exact prompt that would be sent, without contacting Copilot |
+
+**Output options**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `maxChars` | number | — | Truncate the returned text (saves tokens; saved files stay complete) |
+| `includeSources` | boolean | `false` | Append cited source URLs |
+| `save` | `("md"\|"html"\|"json")[]` | — | Also write the full reply to `output/` (see [Saving replies](#saving-replies)) |
 
 ### `ask_copilot`
 
@@ -148,13 +207,24 @@ Send any prompt to Copilot and return its response.
 |---|---|---|---|---|
 | `prompt` | string | ✓ | — | The message to send |
 | `newChat` | boolean | | `false` | Start a new conversation thread |
-| `maxChars` | number | | — | Truncate the returned text (saves tokens; saved files stay complete) |
-| `includeSources` | boolean | | `false` | Append cited source URLs (off by default to save tokens) |
-| `save` | `("md"\|"html"\|"json")[]` | | — | Also write the full reply to `output/` (see [Saving replies](#saving-replies)) |
+| `systemPrompt` | string | | — | Role or standing instruction placed before the prompt |
+| `format` | `"markdown"\|"json"` | | `markdown` | `json` asks for a single JSON block and returns it parsed and pretty-printed |
 
-**Returns:** Copilot's response as compact Markdown (tables, fenced code blocks with language, lists; no citation chips or UI labels).
+**Returns:** Copilot's response as compact Markdown (tables, fenced code blocks with language, lists; no citation chips or UI labels), or JSON when `format` is `json`.
 
----
+### `ask_copilot_batch`
+
+Send up to 10 prompts one after another and return all answers in order. They share one conversation by default.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `prompts` | string[] (1–10) | ✓ | — | Prompts, in order |
+| `newChat` | boolean | | `false` | New thread before the first prompt |
+| `newChatEach` | boolean | | `false` | New thread for every prompt (independent questions) |
+| `stopOnError` | boolean | | `true` | Stop at the first failure |
+| `systemPrompt` | string | | — | Placed before every prompt |
+
+**Returns:** `### Answer N` sections. `isError` is set if any prompt failed.
 
 ### `review_code`
 
@@ -163,35 +233,44 @@ Send code with a specific instruction. Copilot returns analysis, explanation, or
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `instruction` | string | ✓ | — | What to do — e.g. "review for bugs", "explain this", "refactor to use async/await" |
-| `code` | string | ✓ | — | Full file content or a snippet |
-| `language` | string | | — | e.g. `TypeScript`, `Python` — helps Copilot format its response |
-| `filename` | string | | — | e.g. `browser.ts` — gives Copilot extra context |
+| `code` | string | one of `code`/`files` | — | Full file content or a snippet |
+| `files` | `{filename?, language?, code}[]` (max 10) | one of `code`/`files` | — | Several files reviewed together |
+| `language`, `filename` | string | | — | Describe `code` |
+| `focus` | `("bugs"\|"security"\|"performance"\|"tests"\|"style"\|"readability")[]` | | — | What to look for |
+| `minSeverity` | `"info"\|"low"\|"medium"\|"high"` | | all | Report only findings at or above this level |
+| `outputFormat` | `"markdown"\|"findings-json"\|"patch"` | | `markdown` | `findings-json`: array of `{file, line, severity, title, suggestion}`; `patch`: a unified diff |
 | `newChat` | boolean | | `false` | Start a new conversation thread |
-| `maxChars`, `includeSources`, `save` | | | | Same as `ask_copilot` |
 
-**Returns:** Copilot's response as Markdown (analysis, suggestions, or rewritten code).
+**Returns:** Copilot's response as Markdown, parsed JSON, or a diff. If the requested block is missing from the reply, the raw text is returned with a note.
 
 ---
 
 ### `get_status`
 
-Returns the current bridge state as JSON. Useful for confirming auth before calling other tools.
+Returns the bridge state as JSON. Use it to confirm auth before calling other tools.
 
-No parameters.
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `refresh` | boolean | `false` | Re-check the Copilot session now (waits for running prompts, then loads the page) |
 
 **Returns:**
 ```json
 {
   "status": "ok",
   "name": "copilot-bridge",
-  "version": "0.1.0",
+  "version": "0.3.2",
+  "commit": "a1b2c3d",
   "uptime": 142,
   "auth": "ready",
-  "authMessage": "Authenticated — cookies active"
+  "authMessage": "Authenticated — cookies active",
+  "browser": { "mode": "cdp", "edgeReachable": true, "edgeVersion": "Edg/…", "tabOpen": true, "tabUrl": "https://copilot.cloud.microsoft/chat" },
+  "queue": { "queued": 0, "inFlight": false, "calls": 12, "errors": 1, "avgLatencyMs": 18400, "lastSuccessAt": "2026-10-25T21:40:00.000Z", "lastError": null },
+  "config": { "copilotUrl": "https://copilot.cloud.microsoft/", "responseTimeoutMs": 240000, "selectorTimeoutMs": 30000 },
+  "node": "22.x"
 }
 ```
 
-`auth` values: `unauthenticated` | `syncing` | `ready` | `error`
+`auth` values: `unauthenticated` | `syncing` | `ready` | `error`. The counters reset when the bridge restarts. `edgeReachable` is `null` outside CDP mode.
 
 ---
 
@@ -226,10 +305,12 @@ node scripts/extract-code.mjs output/<reply>.json <outDir>   # blocks starting w
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/` | Status page with auth state |
-| `GET` | `/health` | JSON health probe (used by Docker) |
+| `GET` | `/health` | JSON health probe (used by Docker); includes the version |
+| `GET` | `/version` | `{ name, version, commit }` |
 | `GET` | `/debug/dom` | Inputs found on the live Copilot page (selector debugging) |
-| `POST` | `/auth/sync` | Legacy: copy cookies from host Edge profile |
-| `POST` | `/auth/cookies` | Legacy: import `{ cookies: [...] }` (see `scripts/sync-cookies.mjs`) |
+| `POST` | `/auth/recheck` | Re-check the Copilot session (button on the status page) |
+| `POST` | `/auth/sync` | Cookie mode only: copy cookies from host Edge profile |
+| `POST` | `/auth/cookies` | Cookie mode only (rejected in CDP mode): import `{ cookies: [...] }` (see `scripts/sync-cookies.mjs`) |
 | `ALL` | `/mcp` | MCP Streamable HTTP transport |
 
 ---
@@ -241,10 +322,12 @@ node scripts/extract-code.mjs output/<reply>.json <outDir>   # blocks starting w
 | `PORT` | `3100` | HTTP port |
 | `PROFILE_DIR` | `/app/profile` | Container Chromium profile directory |
 | `HOST_PROFILE_DIR` | `/host-profile` | Mount point for the host Edge profile |
-| `CDP_ENDPOINT` | `http://host.docker.internal:9223` (compose) | Drive the signed-in Edge via the CDP proxy; unset for legacy cookie mode |
+| `CDP_ENDPOINT` | `http://host.docker.internal:9223` (compose), `http://127.0.0.1:9222` (node mode) | Drive the signed-in Edge; unset for cookie-import mode |
 | `COPILOT_URL` | `https://copilot.microsoft.com/` (compose: `copilot.cloud.microsoft`) | Copilot entry page |
 | `OUTPUT_DIR` | `/app/output` | Where `save` writes inside the container |
 | `HOST_OUTPUT_DIR` | _(none)_ | Host path shown in "Saved:" results (set in compose) |
+| `GIT_SHA` | `dev` | Build commit shown next to the version (set by the run scripts and the Docker build) |
+| `RUN_MODE` | _(ask)_ | Choice for `scripts/run.sh` / `run.bat` without the menu: `node`, `docker`, `auto`, `stop` |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `error` |
 | `RESPONSE_TIMEOUT_MS` | `120000` | Max wait for Copilot to finish responding |
 | `SELECTOR_TIMEOUT_MS` | `30000` | Max wait for DOM elements |
@@ -254,29 +337,41 @@ node scripts/extract-code.mjs output/<reply>.json <outDir>   # blocks starting w
 ## Project Structure
 
 ```
-mcp-copilot/
+copilot-bridge-mcp/
 ├── src/
-│   ├── index.ts        — HTTP server, /auth/sync route, MCP transport wiring
-│   ├── mcp-server.ts   — Tool definitions (ask_copilot, review_code, get_status)
-│   ├── browser.ts      — Playwright automation, auth state machine, lock cleanup
+│   ├── index.ts        — HTTP server, status page, /version, MCP transport wiring
+│   ├── mcp-server.ts   — Tool definitions (ask_copilot, ask_copilot_batch, review_code, get_status)
+│   ├── prompts.ts      — Prompt building for review_code, JSON / diff output instructions
+│   ├── browser.ts      — Playwright automation, auth state machine
 │   ├── reply.ts        — Reply → Markdown/HTML/code blocks/sources; saving to output/
-│   ├── cookies.ts      — Edge Cookies SQLite copy + CDP extraction fallback
+│   ├── cookies.ts      — Cookie-import mode helpers
 │   ├── config.ts       — All config from environment variables
+│   ├── version.ts      — Version (package.json) and build commit (GIT_SHA)
 │   └── logger.ts       — Structured logger
 ├── dist/               — Compiled JS (after npm run build)
 ├── Dockerfile          — Multi-stage: TS builder + Playwright/Chromium runtime
-├── docker-compose.yml  — Docker Compose config (Edge profile mount is opt-in, legacy mode only)
+├── docker-compose.yml  — Docker Compose config
 ├── scripts/
-│   ├── edge-login.sh    — launch dedicated Edge with remote debugging
-│   ├── cdp-proxy.mjs    — loopback proxy 9223 → 9222 (Host header rewrite)
+│   ├── run.sh           — start Edge + bridge on macOS/Linux; menu: Node.js or Docker; `stop`
+│   ├── run.bat          — start Edge + bridge on Windows; menu: Node.js or Docker; `stop`
+│   ├── edge-login.sh    — launch dedicated Edge with remote debugging (macOS/Linux)
+│   ├── cdp-proxy.mjs    — proxy 9223 → 9222 (Host header rewrite) for Docker mode
 │   ├── extract-code.mjs — saved reply (json) → files, no LLM involved
-│   └── sync-cookies.mjs — legacy cookie export/import
+│   └── sync-cookies.mjs — cookie-import mode helper
 ├── examples/thumbnail-lambda/ — Copilot (Terraform) + Claude (Python) example with token measurements
 ├── output/             — Saved replies (git-ignored)
-├── docs/                — editor setup notes (VS Code / Kiro)
-├── kiro-mcp-config.json   — sample for ~/.kiro/settings/mcp.json
-└── vscode-mcp-config.json — sample for .vscode/mcp.json
+├── docs/               — architecture and editor setup (VS Code / Kiro / Claude Code), security fix plan, AI assistant guide
+├── CHANGELOG.md        — release notes
+└── configs/            — sample MCP configs (kiro-mcp-config.json, vscode-mcp-config.json)
 ```
+
+---
+
+## Versioning
+
+The release version is the `version` field in `package.json` ([Semantic Versioning](https://semver.org/)); release notes are in [CHANGELOG.md](CHANGELOG.md). It is shown on the status page (<http://localhost:3100/>), at `GET /version`, in `/health`, in `get_status` and in the MCP server info. The commit hash appears next to it when `GIT_SHA` is set, which the run scripts and `docker compose build` do automatically.
+
+To release: update `CHANGELOG.md`, run `npm version <patch|minor|major>` (this edits `package.json` and `package-lock.json`), rebuild the container, and tag the commit.
 
 ---
 
@@ -302,10 +397,10 @@ docker compose up -d --build
 The container isn't running or isn't on port 3100. Run `docker compose up -d` and `curl http://localhost:3100/health`.
 
 **`auth: unauthenticated`**
-Make sure the dedicated Edge (`scripts/edge-login.sh`) is open and signed in to Copilot, and `node scripts/cdp-proxy.mjs` is running. Then `docker compose restart`. The status page at http://localhost:3100 shows the reason.
+Make sure the dedicated Edge (started by `scripts/run.sh` / `run.bat`) is open and signed in to Copilot and, in Docker mode, the `cdp-proxy` container is running (`docker ps`). Then restart the bridge (`docker compose restart` in Docker mode). The status page at http://localhost:3100 shows the reason.
 
 **`SingletonLock` / "profile in use by another process"**
-Fixed in the current version — the bridge clears all Chromium lock files before each launch and passes `--no-process-singleton-locks`. If you still see this, run:
+The bridge clears all Chromium lock files before each launch and passes `--no-process-singleton-locks`. If you still see this, run:
 ```bash
 docker compose down -v && docker compose up -d
 ```
