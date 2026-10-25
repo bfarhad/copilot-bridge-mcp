@@ -3,6 +3,12 @@
 Versions follow [Semantic Versioning](https://semver.org/). The version lives in `package.json`;
 the status page (`/`), `/version`, `/health`, the `get_status` tool and the MCP server info all report it.
 
+## 0.3.3
+
+- Security: DNS-rebinding protection — requests whose `Host` header is not `localhost`, `127.0.0.1` or `[::1]` are rejected with `403`; extend with `ALLOWED_HOSTS`.
+- Dependencies: `@modelcontextprotocol/sdk` 1.32.2, `zod` 4.6.7, `express` 5.3.0 (pulls `body-parser` 2.4.0); `npm audit` reports 0 vulnerabilities.
+- Thumbnail example: Pillow 13.0.0; `build.sh` targets `manylinux_2_28_x86_64` (Pillow 13 ships no `manylinux2014` wheels; the Lambda Python 3.12 runtime is Amazon Linux 2023).
+
 ## 0.3.2
 
 - `scripts/run.sh` and `scripts/run.bat` ask which option to use (A: Node.js, B: Docker) and mark unavailable options; `menu`, `node`, `docker`, `auto` and `stop` arguments skip or replace the menu.

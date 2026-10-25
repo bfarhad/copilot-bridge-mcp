@@ -34,7 +34,7 @@ For the lessons learned (including what went wrong and what we did not measure),
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
-pip install pillow==11.0.0 boto3 pytest
+pip install pillow==13.0.0 boto3 pytest
 pytest -q tests                      # unit tests (S3 is faked)
 
 ./scripts/build.sh                   # builds ./build with a Linux Pillow wheel

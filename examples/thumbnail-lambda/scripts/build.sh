@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 rm -rf build && mkdir build
 pip install -r requirements.txt --target build \
-  --platform manylinux2014_x86_64 --python-version 3.12 --implementation cp \
+  --platform manylinux_2_28_x86_64 --python-version 3.12 --implementation cp \
   --only-binary=:all: --quiet
 cp src/handler.py build/
 echo "Built $(du -sh build | cut -f1) in ./build"

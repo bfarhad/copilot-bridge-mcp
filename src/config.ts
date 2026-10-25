@@ -6,6 +6,15 @@ export const config = {
   /** HTTP port the MCP server listens on */
   port: Number(process.env.PORT ?? 3100),
 
+  /**
+   * Hostnames accepted in the HTTP Host header (DNS-rebinding protection).
+   * Comma-separated, without ports; IPv6 in brackets, e.g. "[::1]".
+   */
+  allowedHosts: (process.env.ALLOWED_HOSTS ?? "localhost,127.0.0.1,[::1]")
+    .split(",")
+    .map((h) => h.trim())
+    .filter(Boolean),
+
   /** Chrome/Chromium executable path inside the container (installed by Playwright) */
   executablePath: process.env.BROWSER_EXECUTABLE_PATH ?? undefined,
 
