@@ -74,7 +74,7 @@ The session check requires a visible chat input and a page that is not a sign-in
 
 Use this URL in every config below.
 
-**Optional, OrbStack only:** OrbStack also gives each container a domain, e.g. `https://copilot-bridge.mcp-copilot.orb.local/mcp`. It resolves only on a Mac running OrbStack, so don't put it in files you share.
+**Optional, OrbStack only:** OrbStack also gives each container a domain, e.g. `https://copilot-bridge.mcp-copilot.orb.local/mcp`. It resolves only on a Mac running OrbStack, so don't put it in files you share. The bridge rejects Host names it does not know: to use the OrbStack domain, start with `ALLOWED_HOSTS=localhost,127.0.0.1,[::1],copilot-bridge.mcp-copilot.orb.local docker compose up -d`.
 
 ## Config comparison
 
