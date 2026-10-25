@@ -28,7 +28,10 @@ COPY --chown=pwuser:pwuser package.json ./
 # Chromium executable — glob resolved at runtime via child_process find
 ENV BROWSER_EXECUTABLE_PATH=/ms-playwright/chromium-*/chrome-linux/chrome
 
-ENV PORT=3100 \
+ARG GIT_SHA=dev
+
+ENV GIT_SHA=${GIT_SHA} \
+    PORT=3100 \
     HEADLESS=true \
     LOG_LEVEL=info \
     RESPONSE_TIMEOUT_MS=120000 \

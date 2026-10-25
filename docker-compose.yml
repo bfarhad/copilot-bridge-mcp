@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        GIT_SHA: "${GIT_SHA:-dev}"
     image: mcp-copilot:latest
     container_name: copilot-bridge
     restart: unless-stopped

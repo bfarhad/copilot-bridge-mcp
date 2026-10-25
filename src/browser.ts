@@ -63,7 +63,14 @@ const SEL = {
 export type AuthStatus = "unauthenticated" | "syncing" | "ready" | "error";
 
 let _status: AuthStatus = "unauthenticated";
-let _statusMessage = "Not authenticated. Call POST /auth/sync to import cookies.";
+let _statusMessage = "Not authenticated yet.";
+
+/** What the user has to do to get a session, depending on how the bridge reaches Copilot. */
+export function signInHint(): string {
+  return config.cdpEndpoint
+    ? "Sign in to Copilot in the dedicated Edge window (opened by scripts/run.sh or run.bat), make sure the CDP proxy is running in Docker mode, then click Re-check on http://localhost:3100."
+    : "Run scripts/edge-login.sh, sign in to Copilot, then scripts/sync-cookies.mjs.";
+}
 
 export function getAuthStatus(): { status: AuthStatus; message: string } {
   return { status: _status, message: _statusMessage };
@@ -176,10 +183,14 @@ async function ensureContext(): Promise<BrowserContext> {
   return context;
 }
 
+const cdpModeMessage = () =>
+  "Cookie import is not used in CDP mode: the bridge drives your signed-in Edge directly. " + signInHint();
+
 // ---------------------------------------------------------------------------
 // Auth sync  — called on startup and via POST /auth/sync
 // ---------------------------------------------------------------------------
 export async function syncAuth(): Promise<{ ok: boolean; message: string }> {
+  if (config.cdpEndpoint) return { ok: false, message: cdpModeMessage() };
   _status = "syncing";
   _statusMessage = "Syncing cookies…";
 
@@ -222,6 +233,8 @@ export async function syncAuth(): Promise<{ ok: boolean; message: string }> {
 export async function importCookies(
   cookies: Parameters<BrowserContext["addCookies"]>[0]
 ): Promise<{ ok: boolean; message: string }> {
+  // In CDP mode the context is the user's own Edge: importing would write cookies into it.
+  if (config.cdpEndpoint) return { ok: false, message: cdpModeMessage() };
   _status = "syncing";
   _statusMessage = "Importing cookies…";
   try {
@@ -300,15 +313,15 @@ async function verifySession(): Promise<{ ok: boolean; message: string }> {
     if (onAuthWall || !onCopilot || !hasInput) {
       _status = "unauthenticated";
       _statusMessage =
-        "Cookies did not establish a session — Copilot shows a sign-in page or no chat input. " +
-        "Run scripts/edge-login.sh, sign in to Copilot, then scripts/sync-cookies.mjs.";
-      await p.close().catch(() => {});
+        "No Copilot session — the page shows a sign-in screen or no chat input. " + signInHint();
+      // Never close the tab in CDP mode: it is the user's own and may be where they are signing in.
+      if (!config.cdpEndpoint) await p.close().catch(() => {});
       page = null;
       return { ok: false, message: _statusMessage };
     }
 
     _status = "ready";
-    _statusMessage = "Authenticated — cookies active";
+    _statusMessage = config.cdpEndpoint ? "Authenticated — Copilot is signed in in Edge" : "Authenticated — cookies active";
     logger.info("Session verified ✓");
     return { ok: true, message: _statusMessage };
   } catch (err) {
@@ -348,7 +361,7 @@ export async function tryRestoreSession(): Promise<void> {
   if (!config.cdpEndpoint && !existsSync(cookiesFile)) {
     logger.info("No cookie file in profile — skipping session restore");
     _status = "unauthenticated";
-    _statusMessage = "No session found. Open http://localhost:3100 and click 'Sync Cookies'.";
+    _statusMessage = `No session found. ${signInHint()}`;
     return;
   }
 
@@ -358,7 +371,7 @@ export async function tryRestoreSession(): Promise<void> {
     logger.info("No valid session in profile — call POST /auth/sync to import cookies");
     await resetContext();
     _status = "unauthenticated";
-    _statusMessage = "No session found. Open http://localhost:3100 and click 'Sync Cookies'.";
+    _statusMessage = `No session found. ${signInHint()}`;
   }
 }
 
@@ -366,11 +379,11 @@ export async function tryRestoreSession(): Promise<void> {
 // Ensure a usable page
 // ---------------------------------------------------------------------------
 async function getReadyPage(): Promise<Page> {
+  // In CDP mode the session can appear (or recover) without any bridge action, e.g. after
+  // the user signs in or Edge restarts, so look again instead of staying in a stale state.
+  if (_status !== "ready" && config.cdpEndpoint && _status !== "syncing") await verifySession();
   if (_status !== "ready") {
-    throw new Error(
-      `Bridge not authenticated (status: ${_status}). ` +
-        "Open http://localhost:3100 and sync cookies first."
-    );
+    throw new Error(`Bridge not authenticated (status: ${_status}). ${_statusMessage}`);
   }
 
   if (page && !page.isClosed()) {
@@ -398,19 +411,100 @@ async function getReadyPage(): Promise<Page> {
 // strictly one at a time, each including its own new-chat reset.
 let queue: Promise<unknown> = Promise.resolve();
 
-export function askCopilot(
-  prompt: string,
-  opts: { newChat?: boolean } = {}
-): Promise<CopilotReply> {
-  const run = queue.then(() => askCopilotExclusive(prompt, opts));
+export interface AskOptions {
+  newChat?: boolean;
+  /** Overrides RESPONSE_TIMEOUT_MS for this call. */
+  timeoutMs?: number;
+}
+
+const stats = {
+  calls: 0,
+  errors: 0,
+  totalMs: 0,
+  waiting: 0,
+  inFlight: false,
+  lastSuccessAt: null as string | null,
+  lastError: null as string | null,
+};
+
+/** Counters and queue state for get_status. */
+export function getRuntimeStats() {
+  return {
+    queued: stats.waiting,
+    inFlight: stats.inFlight,
+    calls: stats.calls,
+    errors: stats.errors,
+    avgLatencyMs: stats.calls - stats.errors > 0 ? Math.round(stats.totalMs / (stats.calls - stats.errors)) : null,
+    lastSuccessAt: stats.lastSuccessAt,
+    lastError: stats.lastError,
+  };
+}
+
+export function askCopilot(prompt: string, opts: AskOptions = {}): Promise<CopilotReply> {
+  stats.waiting++;
+  const run = queue.then(async () => {
+    stats.waiting--;
+    stats.inFlight = true;
+    stats.calls++;
+    const started = Date.now();
+    try {
+      const reply = await askCopilotExclusive(prompt, opts);
+      stats.totalMs += Date.now() - started;
+      stats.lastSuccessAt = new Date().toISOString();
+      return reply;
+    } catch (err) {
+      stats.errors++;
+      stats.lastError = err instanceof Error ? err.message : String(err);
+      throw err;
+    } finally {
+      stats.inFlight = false;
+    }
+  });
+  queue = run.catch(() => undefined);
+  return run;
+}
+
+/** Edge reachability and tab state, without sending a prompt. */
+export async function probeBrowser(): Promise<{
+  mode: "cdp" | "cookies";
+  edgeReachable: boolean | null;
+  edgeVersion: string | null;
+  tabOpen: boolean;
+  tabUrl: string | null;
+}> {
+  let edgeReachable: boolean | null = null;
+  let edgeVersion: string | null = null;
+  if (config.cdpEndpoint) {
+    try {
+      const res = await fetch(new URL("/json/version", config.cdpEndpoint), { signal: AbortSignal.timeout(3_000) });
+      edgeReachable = res.ok;
+      if (res.ok) edgeVersion = ((await res.json()) as { Browser?: string }).Browser ?? null;
+    } catch {
+      edgeReachable = false;
+    }
+  }
+  const tabOpen = !!page && !page.isClosed();
+  return {
+    mode: config.cdpEndpoint ? "cdp" : "cookies",
+    edgeReachable,
+    edgeVersion,
+    tabOpen,
+    tabUrl: tabOpen ? page!.url() : null,
+  };
+}
+
+/** Re-check the Copilot session (queued behind running prompts) and update the auth state. */
+export function recheckSession(): Promise<{ ok: boolean; message: string }> {
+  const run = queue.then(() => verifySession());
   queue = run.catch(() => undefined);
   return run;
 }
 
 async function askCopilotExclusive(
   prompt: string,
-  opts: { newChat?: boolean }
+  opts: AskOptions
 ): Promise<CopilotReply> {
+  const timeoutMs = opts.timeoutMs ?? config.responseTimeoutMs;
   if (opts.newChat) {
     await resetForNewChat().catch(() => { /* non-fatal */ });
   }
@@ -438,9 +532,9 @@ async function askCopilotExclusive(
   }
   logger.debug("Prompt submitted, waiting for response…");
 
-  const done = await waitForStreamingToFinish(p, before);
+  const done = await waitForStreamingToFinish(p, before, timeoutMs);
   if (!done) {
-    throw new Error(`Copilot did not respond within ${config.responseTimeoutMs}ms`);
+    throw new Error(`Copilot did not respond within ${timeoutMs}ms`);
   }
 
   const reply = await extractReply(p);
@@ -468,15 +562,15 @@ async function typePrompt(p: Page, prompt: string): Promise<void> {
   }
 }
 
-async function waitForStreamingToFinish(p: Page, before: number): Promise<boolean> {
-  const deadline = Date.now() + config.responseTimeoutMs;
+async function waitForStreamingToFinish(p: Page, before: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
 
   // Strategy A: stop button lifecycle
   try {
     const stop = p.locator(SEL.stopButton).first();
     await stop.waitFor({ state: "visible", timeout: 10_000 });
     logger.debug("Stop button visible — waiting for response to finish…");
-    await stop.waitFor({ state: "hidden", timeout: config.responseTimeoutMs });
+    await stop.waitFor({ state: "hidden", timeout: timeoutMs });
     return true;
   } catch { /* fall through */ }
 
