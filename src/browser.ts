@@ -564,24 +564,28 @@ async function typePrompt(p: Page, prompt: string): Promise<void> {
 
 async function waitForStreamingToFinish(p: Page, before: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
+  // A reply counts as new only once the page holds more replies than before we submitted;
+  // otherwise the previous answer, still on the page, would be returned as this one.
+  const hasNewReply = async () => (await p.locator(REPLY_SELECTOR).count().catch(() => 0)) > before;
 
   // Strategy A: stop button lifecycle
   try {
     const stop = p.locator(SEL.stopButton).first();
     await stop.waitFor({ state: "visible", timeout: 10_000 });
     logger.debug("Stop button visible — waiting for response to finish…");
-    await stop.waitFor({ state: "hidden", timeout: timeoutMs });
-    return true;
+    await stop.waitFor({ state: "hidden", timeout: Math.max(1_000, deadline - Date.now()) });
+    if (await hasNewReply()) return true;
+    logger.debug("Stop button gone but no new reply yet — polling…");
   } catch { /* fall through */ }
 
-  // Strategy B: stable text — use the full candidate list, not just REPLY_SELECTOR
+  // Strategy B: stable text of the newest reply, once a new reply exists
   logger.debug("Falling back to stable-text polling…");
   let last = "";
   let since = Date.now();
   while (Date.now() < deadline) {
     await p.waitForTimeout(500);
+    if (!(await hasNewReply())) { since = Date.now(); continue; }
     const cur = await extractLastResponse(p).catch(() => "");
-    // Only count text that is longer than what was there before we submitted
     if (cur.length > last.length) { last = cur; since = Date.now(); }
     else if (Date.now() - since > 3_000 && cur.length > 0) return true;
   }
