@@ -320,6 +320,7 @@ node scripts/extract-code.mjs output/<reply>.json <outDir>   # blocks starting w
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3100` | HTTP port |
+| `ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` | Hostnames accepted in the `Host` header (DNS-rebinding protection); other hosts get `403`. Add a name here if you reach the bridge through one |
 | `PROFILE_DIR` | `/app/profile` | Container Chromium profile directory |
 | `HOST_PROFILE_DIR` | `/host-profile` | Mount point for the host Edge profile |
 | `CDP_ENDPOINT` | `http://host.docker.internal:9223` (compose), `http://127.0.0.1:9222` (node mode) | Drive the signed-in Edge; unset for cookie-import mode |

@@ -1,6 +1,6 @@
 {
   "name": "mcp-copilot",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "license": "MIT",
   "author": "Farhad Badalov",
   "repository": {
@@ -20,10 +20,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.13.0",
-    "express": "5.1.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "express": "5.3.0",
     "playwright-core": "1.52.0",
-    "zod": "3.25.64"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/express": "5.0.3",

@@ -12,6 +12,7 @@
 
 import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { hostHeaderValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 import { createMcpServer } from "./mcp-server.js";
 import { closeBrowser, tryRestoreSession, syncAuth, importCookies, getAuthStatus, debugPage, recheckSession } from "./browser.js";
 import { config } from "./config.js";
@@ -19,6 +20,9 @@ import { logger } from "./logger.js";
 import { APP_NAME, COMMIT, VERSION, VERSION_LABEL } from "./version.js";
 
 const app = express();
+// DNS-rebinding protection: reject requests whose Host header is not an allowed
+// hostname (default: localhost only). Extend with ALLOWED_HOSTS if needed.
+app.use(hostHeaderValidation(config.allowedHosts));
 app.use(express.json({ limit: "5mb" }));
 
 // ---------------------------------------------------------------------------
